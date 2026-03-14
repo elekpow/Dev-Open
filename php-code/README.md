@@ -12,6 +12,7 @@ project/
     └── bootstrap.php
 ```
 
+пример index.php
 
 ```
 <?php
