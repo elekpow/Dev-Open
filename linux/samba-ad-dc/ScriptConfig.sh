@@ -182,6 +182,10 @@ else
 fi
 echo ""
 
+# log
+sudo sed -i '/\[global\]/a # Logging settings\nlog file = /var/log/samba/log.%m\nlog level = 1\nmax log size = 1000' /etc/samba/smb.conf
+
+
 # Шаг 7: Копирование конфигурации Kerberos
 echo -e "${YELLOW}[7] Копирование конфигурации Kerberos...${NC}"
 cp -b /var/lib/samba/private/krb5.conf /etc/krb5.conf
