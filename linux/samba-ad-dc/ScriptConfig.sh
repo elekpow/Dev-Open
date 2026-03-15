@@ -37,6 +37,15 @@ check_success() {
     fi
 }
 
+# Функция для создания резервной копии файла
+backup_file() {
+    local file=$1
+    if [ -f "$file" ]; then
+        cp "$file" "$file.backup.$(date +%Y%m%d_%H%M%S)"
+        echo -e "${GREEN}  Создана резервная копия $file${NC}"
+    fi
+}
+
 # Шаг 1: Проверка наличия необходимых пакетов
 echo -e "${YELLOW}[1] Проверка необходимых пакетов...${NC}"
 required_packages=("samba" "winbind" "bind9" "bind9utils" "krb5-user" "libnss-winbind" "libpam-winbind")
@@ -67,13 +76,11 @@ rm -rf /var/lib/samba/sysvol/*
 echo -e "${GREEN}Старая конфигурация удалена${NC}"
 echo ""
 
-# Шаг 4: Настройка /etc/hosts - ИСПРАВЛЕНО
+# Шаг 4: Настройка /etc/hosts
 echo -e "${YELLOW}[4] Настройка /etc/hosts...${NC}"
 
 # Создание резервной копии
-BACKUP_FILE="/etc/hosts.backup.$(date +%Y%m%d_%H%M%S)"
-cp /etc/hosts "$BACKUP_FILE"
-echo -e "${GREEN}Создана резервная копия: $BACKUP_FILE${NC}"
+backup_file /etc/hosts
 
 # Создание нового hosts файла с правильным доменом
 cat > /etc/hosts << EOF
@@ -113,8 +120,31 @@ else
 fi
 echo ""
 
-# Шаг 6: Размаскировка и включение службы Samba AD DC
-echo -e "${YELLOW}[6] Настройка службы samba-ad-dc...${NC}"
+# Шаг 6: Добавление дополнительных параметров в секцию [GLOBAL]
+echo -e "${YELLOW}[6] Добавление дополнительных параметров в smb.conf...${NC}"
+
+cat >> /etc/samba/smb.conf << 'EOF'
+
+# Winbind settings
+    template shell = /bin/bash
+    winbind use default domain = true
+    winbind offline logon = false
+    winbind nss info = rfc2307
+    winbind enum users = yes
+    winbind enum groups = yes
+    winbind refresh tickets = yes
+
+# Additional settings
+    server signing = required
+    server min protocol = NT1
+    ntlm auth = enabled
+EOF
+
+echo -e "${GREEN}Дополнительные параметры добавлены${NC}"
+echo ""
+
+# Шаг 7: Размаскировка и включение службы Samba AD DC
+echo -e "${YELLOW}[7] Настройка службы samba-ad-dc...${NC}"
 systemctl unmask samba-ad-dc
 check_success "Служба samba-ad-dc размаскирована"
 
@@ -122,8 +152,8 @@ systemctl enable samba-ad-dc
 check_success "Служба samba-ad-dc добавлена в автозапуск"
 echo ""
 
-# Шаг 7: Настройка Bind9 для работы с Samba
-echo -e "${YELLOW}[7] Настройка Bind9...${NC}"
+# Шаг 8: Настройка Bind9 для работы с Samba
+echo -e "${YELLOW}[8] Настройка Bind9...${NC}"
 
 # Добавление include в named.conf
 echo 'include "/var/lib/samba/bind-dns/named.conf";' | tee -a /etc/bind/named.conf
@@ -156,28 +186,22 @@ else
 fi
 echo ""
 
-# Шаг 8: Настройка логирования в smb.conf
-echo -e "${YELLOW}[8] Настройка логирования Samba...${NC}"
-sudo sed -i '/\[global\]/a # Logging settings\nlog file = /var/log/samba/log.%m\nlog level = 1\nmax log size = 1000' /etc/samba/smb.conf
+# Шаг 9: Настройка логирования в smb.conf
+echo -e "${YELLOW}[9] Настройка логирования Samba...${NC}"
+sed -i '/\[global\]/a # Logging settings\nlog file = /var/log/samba/log.%m\nlog level = 1\nmax log size = 1000' /etc/samba/smb.conf
 echo -e "${GREEN}Логирование настроено${NC}"
 echo ""
 
-# Шаг 9: Копирование конфигурации Kerberos
-echo -e "${YELLOW}[9] Копирование конфигурации Kerberos...${NC}"
+# Шаг 10: Копирование конфигурации Kerberos
+echo -e "${YELLOW}[10] Копирование конфигурации Kerberos...${NC}"
 cp -b /var/lib/samba/private/krb5.conf /etc/krb5.conf
 check_success "Конфигурация Kerberos скопирована"
 echo ""
 
-# Шаг 10: Настройка nsswitch.conf
-echo -e "${YELLOW}[10] Настройка nsswitch.conf...${NC}"
+# Шаг 11: Настройка nsswitch.conf
+echo -e "${YELLOW}[11] Настройка nsswitch.conf...${NC}"
 
-BACKUP_FILE="/etc/nsswitch.conf.backup.$(date +%Y%m%d_%H%M%S)"
-if [ -f /etc/nsswitch.conf ]; then
-    cp /etc/nsswitch.conf "$BACKUP_FILE"
-    echo -e "${GREEN}Создана резервная копия: $BACKUP_FILE${NC}"
-else
-    echo -e "${YELLOW}Файл /etc/nsswitch.conf не найден, будет создан новый${NC}"
-fi
+backup_file /etc/nsswitch.conf
 
 cat > /etc/nsswitch.conf << 'EOF'
 # /etc/nsswitch.conf
@@ -198,8 +222,66 @@ EOF
 echo -e "${GREEN}nsswitch.conf настроен${NC}"
 echo ""
 
-# Шаг 11: Запуск службы Samba AD DC
-echo -e "${YELLOW}[11] Запуск службы samba-ad-dc...${NC}"
+# Шаг 12: ИСПРАВЛЕНИЕ PAM ДЛЯ СМЕНЫ ПАРОЛЯ
+echo -e "${YELLOW}[12] Настройка PAM для смены пароля...${NC}"
+
+# Создаем резервную копию common-password
+backup_file /etc/pam.d/common-password
+
+# Удаляем use_authtok из строки pam_winbind.so в common-password
+if [ -f /etc/pam.d/common-password ]; then
+    # Создаем временный файл
+    TMP_FILE=$(mktemp)
+    
+    # Читаем файл построчно и заменяем нужную строку
+    while IFS= read -r line; do
+        if [[ $line == *"pam_winbind.so"*"use_authtok"* ]]; then
+            # Удаляем use_authtok из строки
+            new_line=$(echo "$line" | sed 's/use_authtok//g')
+            echo "$new_line" >> $TMP_FILE
+            echo -e "${YELLOW}  Изменена строка:${NC}"
+            echo "    Было: $line"
+            echo "    Стало: $new_line"
+        else
+            echo "$line" >> $TMP_FILE
+        fi
+    done < /etc/pam.d/common-password
+    
+    # Заменяем оригинальный файл
+    mv $TMP_FILE /etc/pam.d/common-password
+    echo -e "${GREEN}PAM настроен для смены пароля (удален use_authtok)${NC}"
+else
+    echo -e "${RED} Файл /etc/pam.d/common-password не найден${NC}"
+fi
+echo ""
+
+# Шаг 13: Дополнительная настройка PAM для winbind
+echo -e "${YELLOW}[13] Настройка дополнительных PAM файлов...${NC}"
+
+# Настройка common-auth для winbind
+backup_file /etc/pam.d/common-auth
+if ! grep -q "pam_winbind.so" /etc/pam.d/common-auth; then
+    echo "auth sufficient pam_winbind.so" >> /etc/pam.d/common-auth
+    echo -e "${GREEN}pam_winbind добавлен в common-auth${NC}"
+fi
+
+# Настройка common-account для winbind
+backup_file /etc/pam.d/common-account
+if ! grep -q "pam_winbind.so" /etc/pam.d/common-account; then
+    echo "account sufficient pam_winbind.so" >> /etc/pam.d/common-account
+    echo -e "${GREEN}pam_winbind добавлен в common-account${NC}"
+fi
+
+# Настройка common-session для создания домашней директории
+backup_file /etc/pam.d/common-session
+if ! grep -q "pam_mkhomedir.so" /etc/pam.d/common-session; then
+    echo "session required pam_mkhomedir.so skel=/etc/skel umask=0022" >> /etc/pam.d/common-session
+    echo -e "${GREEN}pam_mkhomedir добавлен в common-session${NC}"
+fi
+echo ""
+
+# Шаг 14: Запуск службы Samba AD DC
+echo -e "${YELLOW}[14] Запуск службы samba-ad-dc...${NC}"
 systemctl start samba-ad-dc
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}Служба samba-ad-dc запущена${NC}"
@@ -211,8 +293,8 @@ fi
 sleep 5
 echo ""
 
-# Шаг 12: Проверка работы DNS
-echo -e "${YELLOW}[12] Проверка работы DNS...${NC}"
+# Шаг 15: Проверка работы DNS
+echo -e "${YELLOW}[15] Проверка работы DNS...${NC}"
 
 if nslookup $FQDN 127.0.0.1 &>/dev/null; then
     echo -e "${GREEN} DNS работает: $FQDN -> $(nslookup $FQDN 127.0.0.1 | grep Address | tail -1)${NC}"
@@ -227,8 +309,8 @@ else
 fi
 echo ""
 
-# Шаг 13: Создание реверсивных зон
-echo -e "${YELLOW}[13] Создание реверсивных зон...${NC}"
+# Шаг 16: Создание реверсивных зон
+echo -e "${YELLOW}[16] Создание реверсивных зон...${NC}"
 
 # Извлекаем октеты для реверсивной зоны
 REV_ZONE=$(echo $SERVER_IP | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
@@ -257,8 +339,8 @@ else
 fi
 echo ""
 
-# Шаг 14: Настройка firewall
-echo -e "${YELLOW}[14] Настройка firewall...${NC}"
+# Шаг 17: Настройка firewall
+echo -e "${YELLOW}[17] Настройка firewall...${NC}"
 if command -v ufw &>/dev/null; then
     ufw allow 53/tcp
     ufw allow 53/udp
@@ -281,8 +363,8 @@ else
 fi
 echo ""
 
-# Шаг 15: Настройка /etc/resolv.conf
-echo -e "${YELLOW}[15] Настройка /etc/resolv.conf...${NC}"
+# Шаг 18: Настройка /etc/resolv.conf
+echo -e "${YELLOW}[18] Настройка /etc/resolv.conf...${NC}"
 
 # Снимаем защиту если была
 chattr -i /etc/resolv.conf 2>/dev/null
@@ -298,8 +380,8 @@ chattr +i /etc/resolv.conf
 echo -e "${GREEN}/etc/resolv.conf настроен на использование локального DNS${NC}"
 echo ""
 
-# Шаг 16: Проверка аутентификации Kerberos
-echo -e "${YELLOW}[16] Проверка аутентификации Kerberos...${NC}"
+# Шаг 19: Проверка аутентификации Kerberos
+echo -e "${YELLOW}[19] Проверка аутентификации Kerberos...${NC}"
 
 # Используем expect для автоматического ввода пароля (если установлен)
 if command -v expect &>/dev/null; then
@@ -324,8 +406,21 @@ else
 fi
 echo ""
 
-# Шаг 17: Итоговая проверка
-echo -e "${YELLOW}[17] Итоговая проверка:${NC}"
+# Шаг 20: Проверка возможности смены пароля
+echo -e "${YELLOW}[20] Проверка конфигурации для смены пароля...${NC}"
+if grep -q "pam_winbind.so" /etc/pam.d/common-password; then
+    if grep -q "use_authtok.*pam_winbind.so" /etc/pam.d/common-password; then
+        echo -e "${RED}   use_authtok все еще присутствует в common-password${NC}"
+    else
+        echo -e "${GREEN}  Конфигурация PAM для смены пароля корректна${NC}"
+    fi
+else
+    echo -e "${YELLOW}   pam_winbind не найден в common-password${NC}"
+fi
+echo ""
+
+# Шаг 21: Итоговая проверка
+echo -e "${YELLOW}[21] Итоговая проверка:${NC}"
 echo "----------------------------------------"
 
 # Проверка служб
@@ -347,11 +442,19 @@ fi
 # Проверка пользователя
 if wbinfo -i administrator &>/dev/null; then
     echo -e "${GREEN} Пользователь administrator: доступен${NC}"
+    # Проверка shell
+    SHELL=$(wbinfo -i administrator | cut -d: -f7)
+    echo -e "${GREEN} Shell administrator: $SHELL${NC}"
 else
     echo -e "${RED} Пользователь administrator: НЕ доступен${NC}"
 fi
 
 echo "----------------------------------------"
+echo ""
+
+# Проверка параметров winbind
+echo -e "${YELLOW}Проверка параметров winbind в smb.conf:${NC}"
+grep -A 10 "winbind" /etc/samba/smb.conf | head -10
 echo ""
 
 # Финальное сообщение
@@ -367,14 +470,29 @@ echo "  IP адрес: $SERVER_IP"
 echo "  Администратор: administrator@$REALM"
 echo "  Пароль: $ADMIN_PASS"
 echo ""
+echo "Добавленные параметры winbind:"
+echo "  template shell = /bin/bash"
+echo "  winbind use default domain = true"
+echo "  winbind offline logon = false"
+echo "  winbind nss info = rfc2307"
+echo "  winbind enum users = yes"
+echo "  winbind enum groups = yes"
+echo ""
+echo "Настройки PAM для смены пароля:"
+echo "  use_authtok удален из /etc/pam.d/common-password"
+echo "  pam_mkhomedir добавлен для автоматического создания home"
+echo ""
 echo "Проверка работы:"
 echo "  kinit administrator@$REALM"
 echo "  samba-tool domain level show -U administrator%'$ADMIN_PASS'"
 echo "  wbinfo -u | head -5"
+echo "  getent passwd administrator"
+echo "  passwd  # для смены своего пароля"
 echo ""
 echo -e "${YELLOW}ВАЖНО: После перезагрузки проверьте:${NC}"
-echo "  getent passwd administrator"
 echo "  sudo -u administrator -i whoami"
+echo "  id administrator"
+echo "  passwd  # попробуйте сменить пароль"
 echo ""
 read -p "Перезагрузить систему сейчас? (y/n): " -n 1 -r
 echo
