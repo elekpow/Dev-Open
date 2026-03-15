@@ -7,7 +7,7 @@ chmod +x ScriptInstallSamba.sh
 
 # Config Samba Domain Controller
 
-*В переменных прописать необходимвые параметры домена
+*В переменных прописать необходимые параметры домена
 
 ```
 DOMAIN="test.local"           # Имя домена в нижнем регистре для DNS
@@ -24,6 +24,16 @@ SERVER_IP="192.168.10.10"     # IP адрес сервера
 chmod +x ScriptConfig.sh
 ./ScriptConfig.sh
 ```
+
+проверить настройки сервера
+
+```
+chmod +x test-domain.sh
+./test-domain.sh
+```
+
+
+
 
 # Remove  Samba Domain Controller
 
