@@ -188,7 +188,67 @@ cp -b /var/lib/samba/private/krb5.conf /etc/krb5.conf
 check_success "Конфигурация Kerberos скопирована"
 echo ""
 
-# Шаг 8: Запуск службы Samba AD DC
+# Шаг 8: nsswitch
+BACKUP_FILE="/etc/nsswitch.conf.backup.$(date +%Y%m%d_%H%M%S)"
+if [ -f /etc/nsswitch.conf ]; then
+    cp /etc/nsswitch.conf "$BACKUP_FILE"
+    echo -e "${GREEN} Создана резервная копия: $BACKUP_FILE${NC}"
+else
+    echo -e "${YELLOW} Файл /etc/nsswitch.conf не найден, будет создан новый${NC}"
+fi
+
+
+WINBIND_INSTALLED=$(dpkg -l | grep -c "winbind")
+NSS_WINBIND_INSTALLED=$(dpkg -l | grep -c "libnss-winbind")
+
+if [ "$WINBIND_INSTALLED" -eq 0 ] || [ "$NSS_WINBIND_INSTALLED" -eq 0 ]; then
+    echo -e "${YELLOW} Некоторые пакеты не установлены:${NC}"
+    [ "$WINBIND_INSTALLED" -eq 0 ] && echo "  - winbind"
+    [ "$NSS_WINBIND_INSTALLED" -eq 0 ] && echo "  - libnss-winbind"
+    echo ""
+    
+    read -p "Установить недостающие пакеты? (y/n): " INSTALL_PKGS
+    if [ "$INSTALL_PKGS" = "y" ] || [ "$INSTALL_PKGS" = "Y" ]; then
+        apt update
+        apt install -y winbind libnss-winbind
+        echo -e "${GREEN} Пакеты установлены${NC}"
+    fi
+else
+    echo -e "${GREEN} Все необходимые пакеты установлены${NC}"
+fi
+
+cat > /etc/nsswitch.conf.new << 'EOF'
+# /etc/nsswitch.conf
+#
+# Example configuration of GNU Name Service Switch functionality.
+# If you have the `glibc-doc-reference' and `info' packages installed, try:
+# `info libc "Name Service Switch"' for information about this file.
+
+passwd:         compat winbind systemd
+group:          compat winbind systemd
+shadow:         compat
+
+gshadow:        files
+
+hosts:          files dns
+networks:       files
+
+protocols:      files
+services:       files
+ethers:         files
+rpc:            files
+
+netgroup:       files
+
+# Дополнительные настройки для Samba AD DC
+# sudo:          files
+# aliases:       files
+EOF
+
+mv /etc/nsswitch.conf.new /etc/nsswitch.conf
+
+
+# Шаг 9: Запуск службы Samba AD DC
 echo -e "${YELLOW}[8] Запуск службы samba-ad-dc...${NC}"
 systemctl start samba-ad-dc
 if [ $? -eq 0 ]; then
@@ -200,7 +260,7 @@ else
 fi
 echo ""
 
-# Шаг 9: Проверка работы DNS
+# Шаг 10: Проверка работы DNS
 echo -e "${YELLOW}[9] Проверка работы DNS...${NC}"
 sleep 5  # Даем время на запуск
 
@@ -217,7 +277,7 @@ else
 fi
 echo ""
 
-# Шаг 10: Создание реверсивных зон (БЕЗ ЗАПРОСА ПАРОЛЯ)
+# Шаг 11: Создание реверсивных зон (БЕЗ ЗАПРОСА ПАРОЛЯ)
 echo -e "${YELLOW}[10] Создание реверсивных зон...${NC}"
 
 # Определяем IP адрес сервера
@@ -256,7 +316,7 @@ else
 fi
 echo ""
 
-# Шаг 11: Настройка firewall
+# Шаг 12: Настройка firewall
 echo -e "${YELLOW}[11] Настройка firewall...${NC}"
 if command -v ufw &>/dev/null; then
     ufw allow 53/tcp
@@ -280,7 +340,7 @@ else
 fi
 echo ""
 
-# Шаг 12: Настройка /etc/resolv.conf
+# Настройка /etc/resolv.conf
 echo -e "${YELLOW}[12] Настройка /etc/resolv.conf...${NC}"
 cat > /etc/resolv.conf << EOF
 domain $HOST
@@ -347,7 +407,7 @@ echo "  samba-tool user list -U Administrator%'$ADMIN_PASS'"
 echo ""
 echo -e "${YELLOW}ВАЖНО: Перезагрузите систему для применения всех настроек!${NC}"
 echo ""
-read -p "Перезагрузить сейчас? (y/n): " -n 1 -r
+read -p "Перезагрузить сейчас или проверить зоны? (y/n): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     reboot
@@ -358,7 +418,7 @@ fi
 echo -e "${GREEN}========================================${NC}"
 echo $ADMIN_PASS | samba-tool dns query localhost test.local @ ALL -U administrator
 echo $ADMIN_PASS | samba-tool dns query localhost test.local _ldap._tcp.Default-First-Site-Name SRV -U administrator
-echo $ADMIN_PASS | samba-tool dns query localhost test.local ForestDnsZones A -U administrator
+# echo $ADMIN_PASS | samba-tool dns query localhost test.local ForestDnsZones A -U administrator
 
 # обновление DNS
 echo -e "${GREEN}========================================${NC}"
