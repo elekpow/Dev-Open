@@ -413,27 +413,104 @@ print_info "[6.2] Настройка логирования Samba..."
 sed -i '/\[global\]/a # Logging settings\n\tlog file = /var/log/samba/log.%m\n\tlog level = 1\n\tmax log size = 1000' /etc/samba/smb.conf
 print_success "Логирование настроено"
 
+
 # Шаг 6.3: Настройка firewall
 print_info "[6.3] Настройка firewall..."
+
+# Функция для добавления правила с проверкой
+add_ufw_rule() {
+    local rule="$1"
+    local comment="$2"
+    
+    # Проверяем, существует ли уже такое правило
+    if ufw status numbered 2>/dev/null | grep -q "$comment"; then
+        print_warning "Правило '$comment' уже существует, пропускаем"
+    else
+        if ufw $rule comment "$comment"; then
+            print_success "  Добавлено: $comment"
+        else
+            print_error "  Ошибка при добавлении: $comment"
+        fi
+    fi
+}
+
 if command -v ufw &>/dev/null; then
-    ufw allow 53/tcp comment 'DNS TCP'
-    ufw allow 53/udp comment 'DNS UDP'
-    ufw allow 88/tcp comment 'Kerberos TCP'
-    ufw allow 88/udp comment 'Kerberos UDP'
-    ufw allow 135/tcp comment 'RPC'
-    ufw allow 137-138/udp comment 'NetBIOS UDP'
-    ufw allow 139/tcp comment 'NetBIOS TCP'
-    ufw allow 389/tcp comment 'LDAP TCP'
-    ufw allow 389/udp comment 'LDAP UDP'
-    ufw allow 445/tcp comment 'SMB'
-    ufw allow 464/tcp comment 'kpasswd TCP'
-    ufw allow 464/udp comment 'kpasswd UDP'
-    ufw allow 636/tcp comment 'LDAPS'
-    ufw allow 3268-3269/tcp comment 'Global Catalog'
-    ufw allow 49152-65535/tcp comment 'RPC dynamic'
-    print_success "Правила firewall добавлены"
+    # Проверяем статус ufw
+    if ufw status | grep -q " inactive"; then
+        print_warning "UFW установлен, но не активен. Включаем..."
+        
+        # Устанавливаем политики по умолчанию
+        ufw default deny incoming
+        ufw default allow outgoing
+        
+        # Включаем UFW (без подтверждения)
+        echo "y" | ufw enable
+        print_success "UFW активирован"
+    else
+        print_success "UFW уже активен"
+    fi
+    
+    echo ""
+    print_info "Добавление правил для контроллера домена..."
+    
+	
+    # DNS
+    add_ufw_rule "allow 53/tcp" "DNS TCP"
+    add_ufw_rule "allow 53/udp" "DNS UDP"
+    
+    # Kerberos
+    add_ufw_rule "allow 88/tcp" "Kerberos TCP"
+    add_ufw_rule "allow 88/udp" "Kerberos UDP"
+    
+    # RPC / NetBIOS / SMB
+    add_ufw_rule "allow 135/tcp" "RPC"
+    add_ufw_rule "allow 137-138/udp" "NetBIOS UDP"
+    add_ufw_rule "allow 139/tcp" "NetBIOS TCP"
+    add_ufw_rule "allow 445/tcp" "SMB"
+    
+    # LDAP
+    add_ufw_rule "allow 389/tcp" "LDAP TCP"
+    add_ufw_rule "allow 389/udp" "LDAP UDP"
+    add_ufw_rule "allow 636/tcp" "LDAPS"
+    
+    # kpasswd
+    add_ufw_rule "allow 464/tcp" "kpasswd TCP"
+    add_ufw_rule "allow 464/udp" "kpasswd UDP"
+    
+    # Global Catalog
+    add_ufw_rule "allow 3268/tcp" "Global Catalog"
+    add_ufw_rule "allow 3269/tcp" "Global Catalog SSL"
+    
+    # RPC dynamic ports
+    add_ufw_rule "allow 49152-65535/tcp" "RPC dynamic"
+    
+    # Дополнительные порты для безопасности
+    add_ufw_rule "allow 22/tcp" "SSH"  # если нужен удаленный доступ
+    
+    # Опционально: rate limiting для защиты от атак
+    # ufw limit ssh/tcp
+    
+    echo ""
+    print_info "Проверка статуса UFW:"
+    ufw status numbered | head -20
+    
+    print_success "Настройка firewall завершена"
+    
+    # Сохраняем правила для восстановления (опционально)
+    mkdir -p /root/backup
+    ufw status numbered > /root/backup/ufw-rules-$(date +%Y%m%d-%H%M%S).txt
+    print_success "Резервная копия правил сохранена в /root/backup/"
+    
 else
-    print_warning "ufw не установлен, пропускаем настройку firewall"
+    print_warning "UFW не установлен. Рекомендуется установить: apt install ufw"
+    
+    # Проверяем наличие других firewall
+    if command -v iptables &>/dev/null; then
+        print_warning "Обнаружен iptables, но автоматическая настройка не производится"
+        echo "  Рекомендуется настроить вручную следующие порты:"
+        echo "  53/tcp,53/udp,88/tcp,88/udp,135/tcp,137-138/udp,139/tcp,389/tcp,389/udp,445/tcp"
+        echo "  464/tcp,464/udp,636/tcp,3268/tcp,3269/tcp,49152-65535/tcp"
+    fi
 fi
 echo ""
 
