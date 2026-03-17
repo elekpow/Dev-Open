@@ -44,7 +44,8 @@ ps_output=$(ps ax | grep -E "samba|smbd|nmbd|winbindd|krb5-kdc|bind9|named" | gr
 if [ -n "$ps_output" ]; then
     echo -e "${RED}Найдены процессы:${NC}"
     echo "$ps_output"
-
+    
+    # Останавливаем процессы
     echo -e "${YELLOW}Останавливаем процессы...${NC}"
     pkill -f "samba|smbd|nmbd|winbindd|krb5-kdc|named" 2>/dev/null
     sleep 2
@@ -77,7 +78,7 @@ for service in samba-ad-dc winbind smbd nmbd krb5-kdc bind9; do
 done
 echo ""
 
-# Шаг 4: Маскировка 
+# Шаг 4: Маскировка стандартных служб Samba (но не samba-ad-dc)
 echo -e "${YELLOW}[4] Маскировка стандартных служб Samba...${NC}"
 for service in smbd nmbd winbind; do
     if systemctl list-unit-files | grep -q $service; then
@@ -89,6 +90,7 @@ echo ""
 
 # Шаг 5: Полное удаление старых конфигураций
 echo -e "${YELLOW}[5] Удаление старых конфигураций...${NC}"
+# Удаление конфигурационных файлов
 rm -f /etc/samba/smb.conf
 rm -rf /etc/samba/smb.conf.d/
 rm -rf /var/lib/samba/private/*
@@ -113,6 +115,7 @@ echo -e "${YELLOW}[7] Переустановка пакетов...${NC}"
 
 # Список пакетов для установки
 packages=(
+    "ufw"
     "samba"
     "winbind"
     "libpam-winbind"
@@ -125,6 +128,7 @@ packages=(
     "bind9utils"
     "ldap-utils"
     "ldb-tools"
+	"smbclient"
 )
 
 # Сначала удалим старые версии (если есть)
@@ -179,6 +183,7 @@ if [ -n "$available_packages" ]; then
     else
         echo -e "${RED} Ошибка при установке пакетов${NC}"
 
+        # Попытка исправить зависимости
         echo -e "${YELLOW}Попытка исправить зависимости...${NC}"
         apt --fix-broken install -y
 
@@ -270,9 +275,10 @@ echo -e "${YELLOW}[12] Рекомендации:${NC}"
 echo "1. Теперь запустите скрипт настройки:"
 echo "   sudo ./ScriptConfig.sh"
 echo ""
-echo "2. Или вручную:"
+echo "2. Или выполните провижининг домена вручную:"
 echo "   sudo samba-tool domain provision --use-rfc2307 --interactive"
 echo ""
+echo "3. После настройки не забудьте:"
 echo "   - Проверить DNS: host -t A $(hostname -f) 127.0.0.1"
 echo "   - Проверить Kerberos: kinit administrator@$(hostname -d | tr '[:lower:]' '[:upper:]')"
 echo ""
@@ -281,5 +287,6 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}   УСТАНОВКА ЗАВЕРШЕНА${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo -e "${YELLOW}скрипт настройки: ./ScriptConfig.sh${NC}"
+echo -e "${YELLOW}ВАЖНО: Все старые пакеты переустановлены, конфигурации очищены${NC}"
+echo -e "${YELLOW}Теперь запустите скрипт настройки: ./ScriptConfig.sh${NC}"
 echo -e "${GREEN}========================================${NC}"

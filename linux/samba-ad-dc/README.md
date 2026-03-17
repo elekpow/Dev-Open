@@ -1,8 +1,8 @@
 # Install Samba Domain Controller
 
 ```
-chmod +x ScriptInstallSamba.sh
-./ScriptInstallSamba.sh
+chmod +x Install.sh
+./Install.sh
 ```
 
 # Config Samba Domain Controller
@@ -21,8 +21,8 @@ SERVER_IP="192.168.10.10"     # IP адрес сервера
 
 
 ```
-chmod +x ScriptConfig.sh
-./ScriptConfig.sh
+chmod +x ConfigSamba.sh
+./ConfigSamba.sh
 ```
 
 проверить настройки сервера
