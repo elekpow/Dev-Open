@@ -453,6 +453,8 @@ if command -v ufw &>/dev/null; then
     echo ""
     print_info "Добавление правил для контроллера домена..."
     
+	# SSH - для удаленного управления
+    add_ufw_rule "allow 22/tcp" "SSH"
 	
     # DNS
     add_ufw_rule "allow 53/tcp" "DNS TCP"
